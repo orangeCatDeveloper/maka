@@ -1,4 +1,4 @@
-import { failureClassFromCompleteStopReason, type SessionEvent } from '@maka/core/events';
+import { type SessionEvent } from '@maka/core/events';
 import { findProjectByIdentity } from '@maka/core/project';
 import { type StoredMessage } from '@maka/core/session';
 import type { CreateSessionInput, UserMessageInput } from '@maka/core/runtime-inputs';
@@ -538,9 +538,7 @@ class TurnOutcomeClassifier {
         this.#finalOutput = observation.text;
         return;
       case 'terminal':
-        if (this.#terminal?.status !== 'failed' || observation.status === 'failed') {
-          this.#terminal = observation;
-        }
+        this.#terminal = observation;
         return;
       case 'sandbox_failure':
         this.#unresolvedBoundary = true;
@@ -599,17 +597,7 @@ function observationFromSessionEvent(event: SessionEvent): TurnOutcomeObservatio
     };
   }
   if (event.type === 'complete') {
-    if (event.stopReason === 'user_stop') {
-      return {
-        kind: 'terminal',
-        status: 'failed',
-        failure: { class: 'aborted', message: 'Turn was cancelled' },
-      };
-    }
-    const failureClass = failureClassFromCompleteStopReason(event.stopReason);
-    return failureClass
-      ? { kind: 'terminal', status: 'failed', failure: { class: failureClass } }
-      : { kind: 'terminal', status: 'completed' };
+    return { kind: 'terminal', status: 'completed' };
   }
   return event.type === 'tool_result' ? observationFromToolResult(event) : undefined;
 }
