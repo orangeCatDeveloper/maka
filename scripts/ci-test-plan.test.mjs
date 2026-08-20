@@ -164,6 +164,17 @@ test('core CI validates affected installed CLI packages on its existing runner',
   assert.match(workflow, /run: npm run release:cli:smoke/u);
 });
 
+test('release contracts run against built CLI outputs', () => {
+  const workflow = readWorkflow('ci.yml');
+  const buildIndex = workflow.indexOf('      - name: Build\n');
+  const buildEnd = workflow.indexOf('\n      - ', buildIndex + 1);
+  const releaseIndex = workflow.indexOf('      - name: Release contracts\n');
+
+  assert.ok(buildIndex >= 0);
+  assert.match(workflow.slice(buildIndex, buildEnd), /cli_package == 'true'/u);
+  assert.ok(buildIndex < releaseIndex);
+});
+
 test('specialized platform workflows never create pull request jobs', () => {
   const cli = readWorkflow('cli-package-validation.yml');
   const baseline = readWorkflow('windows-baseline.yml');
