@@ -46,6 +46,9 @@ export interface DesktopRuntimeHostSshSetupInput {
   readonly sshPort?: number;
   readonly setupPackage: DesktopRuntimeHostSetupPackage;
   readonly principalId: string;
+  readonly expectedServiceId?: string;
+  readonly expectedRootPath?: string;
+  readonly expectedRootId?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -55,6 +58,9 @@ export interface DesktopRuntimeHostSshManagementInput {
   readonly setupPackage: DesktopRuntimeHostSetupPackage;
   readonly principalId: string;
   readonly action: RuntimeHostServiceManagementAction;
+  readonly expectedServiceId: string;
+  readonly expectedRootPath: string;
+  readonly expectedRootId: string;
   readonly signal?: AbortSignal;
 }
 
@@ -88,6 +94,7 @@ export function createDesktopRuntimeHostSshTerminal(input: {
   close(): Promise<void>;
 } {
   let active: ActiveTerminal | undefined;
+  let closed = false;
   let revision = 0;
   let presentation: Exclude<DesktopRuntimeHostSshTerminalSnapshot, { kind: 'idle' }> | undefined;
   function dismissPresentation(terminal: ActiveTerminal): void {
@@ -129,6 +136,7 @@ export function createDesktopRuntimeHostSshTerminal(input: {
     transformOutput: (data: string) => string = (data) => data,
     successfulExitCompletes = false,
   ): { readonly process: RuntimeHostSshProcess; readonly terminal: ActiveTerminal } => {
+    if (closed) throw new Error('Runtime Host SSH terminal is closed');
     if (active) throw new Error('Another Runtime Host SSH terminal is already active');
     const sessionId = randomUUID();
     const pty = (input.spawnPty ?? spawnPty)(executable, [...args], {
@@ -283,6 +291,7 @@ export function createDesktopRuntimeHostSshTerminal(input: {
 
   return {
     openSshTunnel: async (tunnelInput) => {
+      if (closed) throw new Error('Runtime Host SSH terminal is closed');
       const openSshTunnel = input.openSshTunnel ?? openRuntimeHostSshTunnel;
       if (tunnelInput.interaction !== 'terminal') return openSshTunnel(tunnelInput);
       const tunnel = await openSshTunnel(tunnelInput, { spawnProcess });
@@ -291,6 +300,7 @@ export function createDesktopRuntimeHostSshTerminal(input: {
       return tunnel;
     },
     runSetup: async (setupInput, onProgress, onComplete) => {
+      if (closed) throw new Error('Runtime Host SSH terminal is closed');
       setupInput.signal?.throwIfAborted();
       const cancellation = cancellableUntilComplete(setupInput.signal);
       try {
@@ -308,7 +318,7 @@ export function createDesktopRuntimeHostSshTerminal(input: {
           input.processStopGraceMs,
           dismissPresentation,
         );
-        const remoteCommand = runtimeHostSetupRemoteCommand(setupPackage, setupInput.principalId);
+        const remoteCommand = runtimeHostSetupRemoteCommand(setupPackage, setupInput);
         let complete: RuntimeHostSetupCompleteFrame | undefined;
         let setupFailure: Error | undefined;
         let setupTerminal: ActiveTerminal | undefined;
@@ -361,6 +371,7 @@ export function createDesktopRuntimeHostSshTerminal(input: {
       }
     },
     runServiceManagement: async (managementInput) => {
+      if (closed) throw new Error('Runtime Host SSH terminal is closed');
       managementInput.signal?.throwIfAborted();
       const destination = requireSetupDestination(managementInput.destination);
       const sshPort = managementInput.sshPort === undefined
@@ -402,7 +413,7 @@ export function createDesktopRuntimeHostSshTerminal(input: {
         sshRemoteCommandArgs(
           destination,
           sshPort,
-          runtimeHostServiceManagementRemoteCommand(setupPackage, managementInput.action),
+          runtimeHostServiceManagementRemoteCommand(setupPackage, managementInput),
         ),
         filter.push,
         true,
@@ -429,6 +440,7 @@ export function createDesktopRuntimeHostSshTerminal(input: {
       return frame;
     },
     close: async () => {
+      closed = true;
       for (const channel of channels) input.ipcMain.removeHandler(channel);
       const terminal = active;
       if (!terminal) return;
@@ -669,33 +681,54 @@ async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Prom
 
 function runtimeHostSetupRemoteCommand(
   setupPackage: PreparedSetupPackage,
-  principalId: string,
+  input: Pick<
+    DesktopRuntimeHostSshSetupInput,
+    'principalId' | 'expectedServiceId' | 'expectedRootPath' | 'expectedRootId'
+  >,
 ): string {
-  if (!/^[A-Za-z0-9_.:-]{1,128}$/u.test(principalId)) {
+  if (!/^[A-Za-z0-9_.:-]{1,128}$/u.test(input.principalId)) {
     throw new Error('Runtime Host setup principal is invalid');
   }
   return runtimeHostPackageRemoteCommand(setupPackage, [
     'runtime-host',
     'setup',
     '--principal',
-    principalId,
+    input.principalId,
     '--preset',
     'desktop-client',
     '--defer-pairing-commit',
     '--json',
+    ...managedServiceTargetArgs(input),
   ]);
 }
 
 function runtimeHostServiceManagementRemoteCommand(
   setupPackage: PreparedSetupPackage,
-  action: RuntimeHostServiceManagementAction,
+  input: DesktopRuntimeHostSshManagementInput,
 ): string {
   return runtimeHostPackageRemoteCommand(setupPackage, [
     'runtime-host',
     'service',
-    action,
+    input.action,
     '--framed',
+    ...managedServiceTargetArgs(input),
   ]);
+}
+
+function managedServiceTargetArgs(input: {
+  readonly expectedServiceId?: string;
+  readonly expectedRootPath?: string;
+  readonly expectedRootId?: string;
+}): string[] {
+  if (!input.expectedServiceId && !input.expectedRootPath && !input.expectedRootId) return [];
+  if (!input.expectedServiceId || !input.expectedRootPath || !input.expectedRootId) {
+    throw new Error('Managed Runtime Host service identity is incomplete');
+  }
+  return [
+    '--expected-service-id', input.expectedServiceId,
+    '--expected-root-path', input.expectedRootPath,
+    '--expected-root-id', input.expectedRootId,
+  ];
 }
 
 function runtimeHostPackageRemoteCommand(

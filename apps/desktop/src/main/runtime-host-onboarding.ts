@@ -20,13 +20,18 @@ type OnboardingState = DesktopRuntimeHostOnboardingSnapshot extends infer Snapsh
 export function createDesktopRuntimeHostOnboarding(input: {
   readonly ipcMain: Pick<IpcMain, 'handle' | 'removeHandler'>;
   readonly clientInstanceId: string;
-  readonly profiles: Pick<DesktopRuntimeHostProfileService, 'addAndEnableVerified'>;
+  readonly profiles: Pick<
+    DesktopRuntimeHostProfileService,
+    'addAndEnableVerified' | 'getSnapshot'
+  >;
   readonly runSetup: (
     input: DesktopRuntimeHostSshSetupInput,
     onProgress: (frame: { readonly phase: RuntimeHostSetupPhase }) => void,
     onComplete: () => void,
   ) => Promise<{
     readonly rootId: string;
+    readonly rootPath: string;
+    readonly serviceId: string;
     readonly endpoint: string;
     readonly credential: string;
   }>;
@@ -77,6 +82,15 @@ export function createDesktopRuntimeHostOnboarding(input: {
     signal: AbortSignal,
   ): Promise<DesktopRuntimeHostOnboardingSnapshot> => {
     try {
+      const repairProfile = request.repairProfileId
+        ? await resolveRepairProfile(input.profiles, request.repairProfileId)
+        : undefined;
+      const destination = repairProfile?.transport.kind === 'ssh'
+        ? repairProfile.transport.destination
+        : request.destination;
+      const sshPort = repairProfile?.transport.kind === 'ssh'
+        ? repairProfile.transport.sshPort
+        : request.sshPort;
       let commitStarted = false;
       const beginCommit = () => {
         if (commitStarted) return;
@@ -89,10 +103,17 @@ export function createDesktopRuntimeHostOnboarding(input: {
       };
       const complete = await input.runSetup(
         {
-          destination: request.destination,
-          ...(request.sshPort === undefined ? {} : { sshPort: request.sshPort }),
+          destination,
+          ...(sshPort === undefined ? {} : { sshPort }),
           setupPackage: input.setupPackage,
           principalId: `desktop:${input.clientInstanceId}`,
+          ...(repairProfile?.managedService
+            ? {
+                expectedServiceId: repairProfile.managedService.id,
+                expectedRootPath: repairProfile.managedService.rootPath,
+                expectedRootId: repairProfile.rootId,
+              }
+            : {}),
           signal,
         },
         (progress) => {
@@ -106,23 +127,28 @@ export function createDesktopRuntimeHostOnboarding(input: {
       );
       beginCommit();
       const endpoint = requireSetupEndpoint(complete.endpoint);
-      const profileId = `remote-${randomUUID()}`;
-      const profileName = request.name?.trim() || request.destination;
+      const profileId = repairProfile?.id ?? `remote-${randomUUID()}`;
+      const profileName = repairProfile?.name ?? (request.name?.trim() || destination);
       const connected = await input.profiles.addAndEnableVerified({
         profile: {
           id: profileId,
           name: profileName,
           kind: 'remote',
           rootId: complete.rootId,
+          managedService: {
+            id: complete.serviceId,
+            rootPath: complete.rootPath,
+          },
           transport: {
             kind: 'ssh',
-            destination: request.destination,
-            ...(request.sshPort === undefined ? {} : { sshPort: request.sshPort }),
+            destination,
+            ...(sshPort === undefined ? {} : { sshPort }),
             remotePort: endpoint.port,
             websocketPath: endpoint.websocketPath,
           },
         },
         credential: complete.credential,
+        ...(repairProfile ? { expectedProfile: repairProfile } : {}),
       });
       return publish({
         kind: 'complete',
@@ -170,6 +196,23 @@ export function createDesktopRuntimeHostOnboarding(input: {
   };
 }
 
+async function resolveRepairProfile(
+  profiles: Pick<DesktopRuntimeHostProfileService, 'getSnapshot'>,
+  profileId: string,
+) {
+  const profile = (await profiles.getSnapshot()).entries.find(
+    (entry) => entry.profile.id === profileId,
+  )?.profile;
+  if (
+    profile?.kind !== 'remote' ||
+    profile.transport.kind !== 'ssh' ||
+    !profile.managedService
+  ) {
+    throw new Error('Managed Runtime Host repair target was not found');
+  }
+  return profile;
+}
+
 function requireOnboardingInput(value: unknown): DesktopRuntimeHostOnboardingInput {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Remote Runtime Host setup input is invalid');
@@ -183,7 +226,10 @@ function requireOnboardingInput(value: unknown): DesktopRuntimeHostOnboardingInp
     (input.name !== undefined &&
       (typeof input.name !== 'string' || input.name.trim().length > 128)) ||
     (input.sshPort !== undefined &&
-      (!Number.isInteger(input.sshPort) || input.sshPort < 1 || input.sshPort > 65_535))
+      (!Number.isInteger(input.sshPort) || input.sshPort < 1 || input.sshPort > 65_535)) ||
+    (input.repairProfileId !== undefined &&
+      (typeof input.repairProfileId !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(input.repairProfileId)))
   ) {
     throw new Error('Remote Runtime Host setup input is invalid');
   }
@@ -191,6 +237,7 @@ function requireOnboardingInput(value: unknown): DesktopRuntimeHostOnboardingInp
     destination: input.destination,
     ...(input.name?.trim() ? { name: input.name.trim() } : {}),
     ...(input.sshPort === undefined ? {} : { sshPort: input.sshPort }),
+    ...(input.repairProfileId ? { repairProfileId: input.repairProfileId } : {}),
   };
 }
 

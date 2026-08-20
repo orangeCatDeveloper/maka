@@ -178,5 +178,6 @@ Remote Client 不会自动升级或重启 Host、降级 transport、修改 Profi
 - 不要把 credential 放在命令行或 Profile JSON 中。
 - 明文连接需要持久的 Client 确认和独立的 Host 启动参数。
 - Session response 中的 `hostCwd` 只是 Host metadata，不能通过 Client filesystem 解释。
-- Remote Client 不会升级或终止 service process。
+- Runtime Host protocol operation 不会升级或终止 service process；Desktop 管理使用独立认证的
+  SSH operator channel。
 - 在 Host 上使用 `maka runtime-host access revoke --root /srv/maka --credential <credentialId>` 撤销 credential。

@@ -7,6 +7,7 @@ import {
   RUNTIME_HOST_ACCESS_CREDENTIAL_MAX_BYTES,
   RuntimeHostOperationError,
   RuntimeHostPermanentReconnectError,
+  sameRemoteRuntimeHostProfile,
   sameResolvedRuntimeHostProfileTarget,
   type RemoteRuntimeHostProfile,
   type ResolvedRuntimeHostProfile,
@@ -56,7 +57,10 @@ export interface DesktopRuntimeHostProfileService {
     input: DesktopRuntimeHostProfileAddInput,
   ): Promise<DesktopRuntimeHostProfileAddResult>;
   addAndEnableVerified(
-    input: DesktopRuntimeHostProfileAddInput & { readonly credential: string },
+    input: DesktopRuntimeHostProfileAddInput & {
+      readonly credential: string;
+      readonly expectedProfile?: RemoteRuntimeHostProfile;
+    },
   ): Promise<{ readonly profileId: string }>;
   recoverPendingPairings(): Promise<void>;
   setEnabled(profileId: string, enabled: boolean): Promise<DesktopRuntimeHostProfileSnapshot>;
@@ -477,6 +481,12 @@ export function createDesktopRuntimeHostProfileService(input: {
         const existing = currentDocument.profiles.find(
           (profile) => profile.rootId === value.profile.rootId,
         );
+        if (
+          value.expectedProfile &&
+          (!existing || !sameRemoteRuntimeHostProfile(existing, value.expectedProfile))
+        ) {
+          throw new Error("Runtime Host repair target no longer matches the selected profile");
+        }
         const previousTarget = existing ? await catalog.resolve(existing.id) : undefined;
         const profile = existing ? { ...value.profile, id: existing.id } : value.profile;
         const target = { profile, credential: value.credential } as const;

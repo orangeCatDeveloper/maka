@@ -16,6 +16,7 @@ export {
   connectRemoteRuntimeHostProfile,
   decodeRemoteRuntimeHostProfile,
   remoteRuntimeHostUnavailableError,
+  sameRemoteRuntimeHostProfile,
   sameResolvedRuntimeHostProfileTarget,
   type RemoteRuntimeHostProfile,
   type RuntimeHostRemoteTransport,

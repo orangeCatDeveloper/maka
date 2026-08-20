@@ -184,5 +184,6 @@ Remote Clients never auto-upgrade or restart the Host, downgrade the transport, 
 - Do not put credentials on the command line or in Profile JSON.
 - Plaintext requires durable Client acknowledgement and an independent Host startup flag.
 - Session responses may include a resolved `hostCwd`. Treat it as Host metadata, never as a Client filesystem path.
-- A remote Client neither upgrades nor terminates the service process.
+- Runtime Host protocol operations neither upgrade nor terminate the service process. Desktop
+  management uses the separately authenticated SSH operator channel.
 - Revoke a credential on the Host with `maka runtime-host access revoke --root /srv/maka --credential <credentialId>`.

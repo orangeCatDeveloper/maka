@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const RUNTIME_HOST_SETUP_FRAME_PREFIX = 'MAKA_RUNTIME_HOST_SETUP_V1 ';
-const SETUP_FRAME_MAX_BYTES = 16 * 1024;
+const SETUP_FRAME_MAX_BYTES = 32 * 1024;
 const SETUP_FIELD_MAX_BYTES = 1024;
 const SETUP_CREDENTIAL_MAX_BYTES = 8 * 1024;
 export const RUNTIME_HOST_SETUP_ERROR_CODE_MAX_BYTES = 128;
@@ -38,6 +38,8 @@ const SETUP_FRAME_SCHEMA = z.discriminatedUnion('kind', [
       ...frameBase,
       kind: z.literal('complete'),
       version: boundedString(128),
+      serviceId: z.string().regex(/^[a-f0-9]{64}$/u),
+      rootPath: boundedString(4 * 1024).refine((value) => !/[\u0000-\u001f\u007f]/u.test(value)),
       rootId: z.string().regex(/^[a-f0-9]{64}$/u),
       endpoint: boundedString(SETUP_FIELD_MAX_BYTES).refine(isLoopbackWebSocketUrl),
       credentialId: boundedString(SETUP_FIELD_MAX_BYTES),
