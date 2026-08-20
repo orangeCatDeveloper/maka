@@ -433,7 +433,7 @@ export interface MakaBridge {
     remove(profileId: string): Promise<DesktopRuntimeHostProfileSnapshot>;
     setEnabled(profileId: string, enabled: boolean): Promise<DesktopRuntimeHostProfileSnapshot>;
     setDefault(profileId: string): Promise<DesktopRuntimeHostProfileSnapshot>;
-    discardPairingRecovery(): Promise<DesktopRuntimeHostProfileSnapshot>;
+    resolvePairingRecovery(): Promise<DesktopRuntimeHostProfileSnapshot>;
     subscribeChanges(
       handler: (event: DesktopRuntimeHostProfileChangedEvent) => void,
     ): () => void;

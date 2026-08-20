@@ -28,6 +28,7 @@ import {
 } from "./runtime-host-desktop-manager.js";
 import {
   createDesktopRuntimeHostPairingIntent,
+  DesktopRuntimeHostPairingJournalInvalidError,
   pairingIntentMatchesTarget,
   readDesktopRuntimeHostPairingIntent,
   writeDesktopRuntimeHostPairingIntent,
@@ -62,7 +63,7 @@ export interface DesktopRuntimeHostProfileService {
     input: DesktopRuntimeHostProfileAddInput & { readonly credential: string },
   ): Promise<{ readonly profileId: string }>;
   startEnabledProfiles(): Promise<void>;
-  discardPairingRecovery(): Promise<DesktopRuntimeHostProfileSnapshot>;
+  resolvePairingRecovery(): Promise<DesktopRuntimeHostProfileSnapshot>;
   setEnabled(profileId: string, enabled: boolean): Promise<DesktopRuntimeHostProfileSnapshot>;
   setDefault(profileId: string): Promise<DesktopRuntimeHostProfileSnapshot>;
   remove(profileId: string): Promise<DesktopRuntimeHostProfileSnapshot>;
@@ -218,7 +219,7 @@ export function createDesktopRuntimeHostProfileService(input: {
       }
       if (pairingReadFailure) {
         throw new Error(
-          "Discard the unreadable Runtime Host pairing recovery state before changing profiles",
+          "Resolve the unreadable Runtime Host pairing recovery state before changing profiles",
           { cause: pairingReadFailure },
         );
       }
@@ -298,6 +299,13 @@ export function createDesktopRuntimeHostProfileService(input: {
       if (!current || !sameResolvedRuntimeHostProfileTarget(current, target)) {
         await input.disable(target.profile.id);
         throw new Error("Runtime Host profile changed while it was connecting");
+      }
+      const remainsEnabled =
+        target.profile.id === preferences.defaultProfileId ||
+        preferences.enabledRemoteProfileIds.includes(target.profile.id);
+      if (!remainsEnabled) {
+        await input.disable(target.profile.id);
+        return;
       }
       unavailable.delete(target.profile.id);
     } catch (error) {
@@ -477,12 +485,15 @@ export function createDesktopRuntimeHostProfileService(input: {
       requireSaveInput(value);
       return mutateProfiles(async () => {
         const currentDocument = await catalog.read();
-        const existing = currentDocument.profiles.find(
+        const sameHostProfiles = currentDocument.profiles.filter(
           (profile) => profile.rootId === value.profile.rootId,
         );
-        if (existing && !sameRemoteRuntimeHostProfileTarget(existing, value.profile)) {
+        const existing = sameHostProfiles.find((profile) =>
+          sameRemoteRuntimeHostProfileTarget(profile, value.profile),
+        );
+        if (!existing && sameHostProfiles.length > 0) {
           throw new Error(
-            "This Runtime Host is already configured through another connection",
+            `Runtime Host "${sameHostProfiles[0]!.name}" is already configured through another connection; remove it before pairing this connection`,
           );
         }
         const previousTarget = existing ? await catalog.resolve(existing.id) : undefined;
@@ -543,11 +554,19 @@ export function createDesktopRuntimeHostProfileService(input: {
       }
       return Promise.all(tasks).then(() => undefined);
     },
-    discardPairingRecovery() {
+    resolvePairingRecovery() {
       return mutate(async () => {
         if (!pairingReadFailure) return snapshot();
-        await writeDesktopRuntimeHostPairingIntent(credentialStore, undefined);
-        pairingReadFailure = undefined;
+        try {
+          pairingIntent = await readDesktopRuntimeHostPairingIntent(credentialStore);
+          pairingReadFailure = undefined;
+          if (pairingIntent) await recoverPairingIntent(pairingIntent);
+        } catch (error) {
+          if (!(error instanceof DesktopRuntimeHostPairingJournalInvalidError)) throw error;
+          await writeDesktopRuntimeHostPairingIntent(credentialStore, undefined);
+          pairingIntent = undefined;
+          pairingReadFailure = undefined;
+        }
         return snapshot();
       });
     },
@@ -687,7 +706,7 @@ export function registerDesktopRuntimeHostProfileIpc(
     "runtime-host-profiles:set-enabled",
     "runtime-host-profiles:set-default",
     "runtime-host-profiles:remove",
-    "runtime-host-profiles:discard-pairing-recovery",
+    "runtime-host-profiles:resolve-pairing-recovery",
   ] as const;
   ipcMain.handle(channels[0], () => service.getSnapshot());
   ipcMain.handle(channels[1], (_event, value: DesktopRuntimeHostProfileAddInput) =>
@@ -698,7 +717,7 @@ export function registerDesktopRuntimeHostProfileIpc(
   );
   ipcMain.handle(channels[3], (_event, profileId: string) => service.setDefault(profileId));
   ipcMain.handle(channels[4], (_event, profileId: string) => service.remove(profileId));
-  ipcMain.handle(channels[5], () => service.discardPairingRecovery());
+  ipcMain.handle(channels[5], () => service.resolvePairingRecovery());
   return () => {
     for (const channel of channels) ipcMain.removeHandler(channel);
   };

@@ -11,6 +11,10 @@ const PAIRING_JOURNAL_SCHEMA_VERSION = 1;
 const PAIRING_JOURNAL_CREDENTIAL_SLOT = 'runtime-host-pairing-recovery';
 const PAIRING_JOURNAL_MAX_BYTES = 512 * 1024;
 
+export class DesktopRuntimeHostPairingJournalInvalidError extends Error {
+  override readonly name = 'DesktopRuntimeHostPairingJournalInvalidError';
+}
+
 export interface DesktopRuntimeHostPairingIntent {
   readonly target: {
     readonly profile: RemoteRuntimeHostProfile;
@@ -53,12 +57,17 @@ export async function readDesktopRuntimeHostPairingIntent(
   );
   if (contents === null) return undefined;
   if (Buffer.byteLength(contents, 'utf8') > PAIRING_JOURNAL_MAX_BYTES) {
-    throw new Error('Runtime Host pairing recovery journal exceeds its size limit');
+    throw new DesktopRuntimeHostPairingJournalInvalidError(
+      'Runtime Host pairing recovery journal exceeds its size limit',
+    );
   }
   try {
     return decodePairingJournal(JSON.parse(contents));
   } catch (error) {
-    throw new Error('Runtime Host pairing recovery journal is invalid', { cause: error });
+    throw new DesktopRuntimeHostPairingJournalInvalidError(
+      'Runtime Host pairing recovery journal is invalid',
+      { cause: error },
+    );
   }
 }
 
