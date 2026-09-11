@@ -1,0 +1,94 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Desktop e2e is the largest step in CI (327s median, 40% of the job) and runs
+# at `workers: 1`. The config says CI gives every worker its own X display, but
+# CI wraps the whole run in a single `xvfb-run -a`, so that has never been true
+# and the setting has never been tested against the real runner. Measure what
+# more workers cost and whether the focus and geometry contracts survive a
+# shared display before writing any per-worker display plumbing.
+name: Desktop e2e worker A/B
+
+on:
+  push:
+    branches: [ci/e2e-workers-ab]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep bubblewrap xvfb
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Sweep
+        working-directory: apps/desktop
+        run: |
+          mkdir -p /tmp/e2e-logs
+          echo "availableParallelism=$(node -p 'require("os").availableParallelism()')"
+          # A worker count that breaks the focus or geometry contracts has to
+          # report its failures, not take the rest of the sweep down with it.
+          run_workers() {
+            local n="$1" round="$2"
+            local log="/tmp/e2e-logs/workers-$n-r$round.log"
+            local start=$SECONDS status=ok
+            xvfb-run -a npm exec -- playwright test --config e2e/playwright.config.ts \
+              --workers="$n" --reporter=line > "$log" 2>&1 || status=failed
+            echo "workers=$n,r$round,$((SECONDS - start)),$status" >> /tmp/e2e-results.csv
+            echo "workers=$n r$round: $((SECONDS - start))s $status"
+          }
+          for round in 1 2; do
+            for n in 1 2 3; do run_workers "$n" "$round"; done
+          done
+
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo '| variant | round | seconds | result |'
+            echo '| --- | --- | --- | --- |'
+            sed 's/,/ | /g; s/^/| /; s/$/ |/' /tmp/e2e-results.csv
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/e2e-results.csv
+          for log in /tmp/e2e-logs/*.log; do
+            echo "=== $log"
+            tail -25 "$log"
+          done
+
+      - name: Upload e2e logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-logs
+          path: /tmp/e2e-logs
