@@ -95,7 +95,7 @@ test('core CI validates pull requests and the resulting main branch state', () =
   const workflow = readWorkflow('ci.yml');
 
   assert.match(workflow, /pull_request:\n\s+branches: \[main\]/u);
-  assert.match(workflow, /push:\n\s+branches: \[main\]/u);
+  assert.match(workflow, /push:\n\s+branches: \[main[,\]]/u);
   assert.match(workflow, /PUSH_BASE_SHA: \$\{\{ github\.event\.before \}\}/u);
   assert.match(workflow, /PR_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/u);
   assert.doesNotMatch(workflow, /github\.event\.pull_request\.base\.sha/u);
