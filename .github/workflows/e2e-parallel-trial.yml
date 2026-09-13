@@ -145,10 +145,16 @@ jobs:
             fi
             elapsed=$(($(date +%s) - started))
             durations+=("$elapsed")
-            echo "run $run: $verdict in ${elapsed}s"
+            # Load average right after the suite: the whole question is whether
+            # per-worker X trades focus flake for CPU starvation, and a 4-vCPU
+            # box saturated at 3 Electron instances says so directly.
+            echo "run $run: $verdict in ${elapsed}s load:$(cut -d' ' -f1-3 /proc/loadavg)"
             if [ "$verdict" = FAIL ]; then
-              echo '--- failing tests ---'
-              grep -E '^\s+[0-9]+\) ' "$logs/run-$run.log" || tail -30 "$logs/run-$run.log"
+              # Inline, not only in the artifact: the failure reason is the
+              # result, and an artifact upload can fail after the runner is gone.
+              echo '--- failure detail ---'
+              grep -vE 'xkbcomp|Could not resolve keysym|^\s*> Warning' "$logs/run-$run.log" \
+                | tail -80
             fi
           done
 
@@ -168,7 +174,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: e2e-parallel-trial-${{ github.ref_name }}
+          name: e2e-parallel-trial-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/trial-logs/
             apps/desktop/e2e/test-results/
