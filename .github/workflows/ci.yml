@@ -21,7 +21,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, ci-ab-tests-control, ci-ab-tests-merged]
   workflow_dispatch:
 
 concurrency:
