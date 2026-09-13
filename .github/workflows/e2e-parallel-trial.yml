@@ -1,0 +1,176 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Throwaway measurement lane for the per-worker-X-server experiment. Never
+# merges: it exists to answer whether one Xvfb per Playwright worker removes
+# the focus contention that made `workers: 3` flake, and whether a 4-vCPU
+# runner then trades that flake for CPU-starvation flake. Delete with the
+# branch.
+name: E2E parallel trial
+
+# Push-triggered, not dispatch: `workflow_dispatch` is only addressable once
+# the file sits on the default branch, and this one must never go near it.
+# The worker count rides in the branch name suffix (`...-w3`), so one push per
+# arm is the whole control surface.
+on:
+  push:
+    branches: ['perf/e2e-per-worker-display-w*']
+
+concurrency:
+  group: e2e-parallel-trial-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  trial:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Restore Electron artifact cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: electron-${{ runner.os }}-
+
+      # xdpyinfo is the readiness probe: a socket in /tmp/.X11-unix appears
+      # before the server accepts clients, so waiting on the path alone races.
+      - name: Install X servers
+        run: sudo apt-get update && sudo apt-get install -y xvfb x11-utils
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Report runner capacity
+        run: |
+          nproc
+          free -m
+
+      - name: Repeat the suite
+        env:
+          RUNS: '10'
+        run: |
+          set -uo pipefail
+
+          WORKERS="${GITHUB_REF_NAME##*-w}"
+          case "$WORKERS" in
+            1 | 2 | 3 | 4) ;;
+            *) echo "branch name must end in -w<1-4>, got $GITHUB_REF_NAME"; exit 1 ;;
+          esac
+
+          # One free base for the whole block, so a stale lock cannot silently
+          # put two workers on one server.
+          base=90
+          while :; do
+            collision=0
+            for i in $(seq 0 "$((WORKERS - 1))"); do
+              [ -e "/tmp/.X11-unix/X$((base + i))" ] && collision=1
+            done
+            [ "$collision" -eq 0 ] && break
+            base=$((base + 10))
+            [ "$base" -gt 200 ] && { echo "no free display range"; exit 1; }
+          done
+          echo "display base :$base for $WORKERS worker(s)"
+
+          pids=()
+          cleanup() {
+            for pid in "${pids[@]:-}"; do kill "$pid" 2>/dev/null || true; done
+            wait 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for i in $(seq 0 "$((WORKERS - 1))"); do
+            Xvfb ":$((base + i))" -screen 0 1280x1024x24 -nolisten tcp &
+            pids+=("$!")
+          done
+          for i in $(seq 0 "$((WORKERS - 1))"); do
+            display=":$((base + i))"
+            ready=0
+            for _ in $(seq 1 100); do
+              if xdpyinfo -display "$display" >/dev/null 2>&1; then ready=1; break; fi
+              sleep 0.1
+            done
+            [ "$ready" -eq 1 ] || { echo "Xvfb $display never accepted clients"; exit 1; }
+          done
+
+          logs="$RUNNER_TEMP/trial-logs"
+          mkdir -p "$logs"
+          passed=0
+          failed=0
+          durations=()
+
+          for run in $(seq 1 "$RUNS"); do
+            started=$(date +%s)
+            # MAKA_E2E_DISPLAY_BASE only takes effect inside buildFixtureEnv,
+            # so the Playwright parent still needs a DISPLAY of its own.
+            if DISPLAY=":$base" \
+               MAKA_E2E_WORKERS="$WORKERS" \
+               MAKA_E2E_DISPLAY_BASE="$base" \
+               npm exec -w @maka/desktop -- playwright test \
+                 --config e2e/playwright.config.ts --reporter=line \
+                 >"$logs/run-$run.log" 2>&1; then
+              passed=$((passed + 1))
+              verdict=pass
+            else
+              failed=$((failed + 1))
+              verdict=FAIL
+            fi
+            elapsed=$(($(date +%s) - started))
+            durations+=("$elapsed")
+            echo "run $run: $verdict in ${elapsed}s"
+            if [ "$verdict" = FAIL ]; then
+              echo '--- failing tests ---'
+              grep -E '^\s+[0-9]+\) ' "$logs/run-$run.log" || tail -30 "$logs/run-$run.log"
+            fi
+          done
+
+          {
+            echo "## workers=$WORKERS, runs=$RUNS"
+            echo
+            echo "| passed | failed | durations (s) |"
+            echo "| --- | --- | --- |"
+            echo "| $passed | $failed | ${durations[*]} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # A trial reports; it does not gate. The failure count above is the
+          # result, so a flaky run must not look like a broken lane.
+          echo "passed=$passed failed=$failed"
+
+      - name: Upload trial logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-parallel-trial-${{ github.ref_name }}
+          path: |
+            ${{ runner.temp }}/trial-logs/
+            apps/desktop/e2e/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

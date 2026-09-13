@@ -35,7 +35,9 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: '.',
-  workers: 1,
+  // Trial only: MAKA_E2E_WORKERS>1 requires one Xvfb per worker (see
+  // buildFixtureEnv's MAKA_E2E_DISPLAY_BASE). Unset stays at one worker.
+  workers: Number(process.env.MAKA_E2E_WORKERS ?? 1),
   // CI publishes no Playwright report that consumes Git metadata. Disable its
   // best-effort shallow-history fetch, which otherwise waits on a fixed timeout.
   captureGitInfo: { commit: false, diff: false },

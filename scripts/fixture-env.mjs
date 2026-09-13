@@ -104,6 +104,15 @@ export function buildFixtureEnv(userDataDir, homeDir, options = {}) {
   // function of its arguments, so a test asserting "hidden run stays hidden"
   // means the same thing on a laptop and on a CI runner.
   if (options.showWindow) env.MAKA_E2E_SHOW_WINDOW = '1';
+  // Trial only: one X server per Playwright worker so concurrent Electron
+  // windows stop sharing focus, pointer and stacking. Opt-in via the base env
+  // var, so non-Playwright launchers (audit-alignment, the browser smoke) and
+  // every unset run keep the inherited DISPLAY.
+  const displayBase = env.MAKA_E2E_DISPLAY_BASE;
+  const parallelIndex = env.TEST_PARALLEL_INDEX;
+  if (displayBase && parallelIndex) {
+    env.DISPLAY = `:${Number(displayBase) + Number(parallelIndex)}`;
+  }
   return env;
 }
 
