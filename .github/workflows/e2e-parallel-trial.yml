@@ -123,6 +123,34 @@ jobs:
 
           logs="$RUNNER_TEMP/trial-logs"
           mkdir -p "$logs"
+
+          # Proof the routing took effect. A previous round silently ran every
+          # worker on one server because the variable was stripped before it was
+          # read, and a green arm looked exactly the same as a working one.
+          for i in $(seq 0 "$((WORKERS - 1))"); do
+            routed=$(MAKA_E2E_DISPLAY_BASE="$base" TEST_PARALLEL_INDEX="$i" node --input-type=module \
+              -e 'import { buildFixtureEnv } from "./scripts/fixture-env.mjs";
+                  process.stdout.write(String(buildFixtureEnv("/tmp/d", "/tmp/h").DISPLAY));')
+            expected=":$((base + i))"
+            [ "$routed" = "$expected" ] || { echo "worker $i routes to $routed, expected $expected"; exit 1; }
+          done
+          echo "routing verified for $WORKERS worker(s)"
+
+          # Sample live X clients per display during the first run, so the log
+          # carries evidence the workers really landed on separate servers.
+          (
+            for _ in $(seq 1 20); do
+              line="clients"
+              for i in $(seq 0 "$((WORKERS - 1))"); do
+                d=":$((base + i))"
+                n=$(xlsclients -display "$d" 2>/dev/null | wc -l | tr -d ' ')
+                line="$line $d=$n"
+              done
+              echo "$line"
+              sleep 8
+            done
+          ) > "$logs/x-clients.log" 2>&1 &
+          sampler=$!
           passed=0
           failed=0
           durations=()
@@ -157,6 +185,10 @@ jobs:
                 | tail -80
             fi
           done
+
+          kill "$sampler" 2>/dev/null || true
+          echo '--- peak X clients per display ---'
+          sort -u "$logs/x-clients.log" | tail -12
 
           {
             echo "## workers=$WORKERS, runs=$RUNS"

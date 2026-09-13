@@ -66,6 +66,10 @@ function isDeniedEnvKey(key) {
  */
 export function buildFixtureEnv(userDataDir, homeDir, options = {}) {
   const env = { ...process.env };
+  // Read before the denylist strips it: the child must not inherit the routing
+  // variable, but this builder still has to act on it.
+  const displayBase = env.MAKA_E2E_DISPLAY_BASE;
+  const parallelIndex = env.TEST_PARALLEL_INDEX;
   for (const key of Object.keys(env)) {
     if (isDeniedEnvKey(key)) delete env[key];
   }
@@ -104,12 +108,11 @@ export function buildFixtureEnv(userDataDir, homeDir, options = {}) {
   // function of its arguments, so a test asserting "hidden run stays hidden"
   // means the same thing on a laptop and on a CI runner.
   if (options.showWindow) env.MAKA_E2E_SHOW_WINDOW = '1';
-  // Trial only: one X server per Playwright worker so concurrent Electron
-  // windows stop sharing focus, pointer and stacking. Opt-in via the base env
-  // var, so non-Playwright launchers (audit-alignment, the browser smoke) and
-  // every unset run keep the inherited DISPLAY.
-  const displayBase = env.MAKA_E2E_DISPLAY_BASE;
-  const parallelIndex = env.TEST_PARALLEL_INDEX;
+  // One X server per Playwright worker. Windows on a shared server contend for
+  // focus, pointer and stacking, which is what held this tier to one worker;
+  // separate servers have separate ones. Set by whoever started those servers,
+  // so a run without them keeps the inherited display and stays serial. Applied
+  // here rather than at the launch sites so a restart lands on the same server.
   if (displayBase && parallelIndex) {
     env.DISPLAY = `:${Number(displayBase) + Number(parallelIndex)}`;
   }
