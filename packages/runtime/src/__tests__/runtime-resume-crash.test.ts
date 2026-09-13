@@ -48,49 +48,51 @@ if (process.env[CRASH_CHILD_ENV] === '1') {
     }, async () => {
       const root = await mkdtemp(join(tmpdir(), 'maka-runtime-resume-crash-'));
       try {
-        for (const failpoint of RUNTIME_RESUME_FAILPOINTS) {
-          const workspaceRoot = join(root, failpoint.id);
-          const sessionId = `session-${failpoint.id}`;
-          const runId = `run-${failpoint.id}`;
-          const markerPath = join(workspaceRoot, 'child-finally-ran');
-          const allEvents = ledgerEvents(sessionId, runId);
-          const committedEvents = allEvents.slice(
-            0,
-            committedEventCount(failpoint.committedPrefix),
-          );
+        await Promise.all(
+          RUNTIME_RESUME_FAILPOINTS.map(async (failpoint) => {
+            const workspaceRoot = join(root, failpoint.id);
+            const sessionId = `session-${failpoint.id}`;
+            const runId = `run-${failpoint.id}`;
+            const markerPath = join(workspaceRoot, 'child-finally-ran');
+            const allEvents = ledgerEvents(sessionId, runId);
+            const committedEvents = allEvents.slice(
+              0,
+              committedEventCount(failpoint.committedPrefix),
+            );
 
-          await crashWriterAfterCommit({
-            workspaceRoot,
-            sessionId,
-            runId,
-            markerPath,
-            events: committedEvents,
-          });
+            await crashWriterAfterCommit({
+              workspaceRoot,
+              sessionId,
+              runId,
+              markerPath,
+              events: committedEvents,
+            });
 
-          assert.equal(
-            await pathExists(markerPath),
-            false,
-            `${failpoint.id} unexpectedly ran finally`,
-          );
-          const reopened = createWorkspaceRuntimeStore(workspaceRoot);
-          const recoveredEvents = await reopened.readRuntimeEvents(sessionId, runId);
-          assert.deepEqual(
-            recoveredEvents.map((event) => event.id),
-            committedEvents.map((event) => event.id),
-            `${failpoint.id} reopened a different committed prefix`,
-          );
+            assert.equal(
+              await pathExists(markerPath),
+              false,
+              `${failpoint.id} unexpectedly ran finally`,
+            );
+            const reopened = createWorkspaceRuntimeStore(workspaceRoot);
+            const recoveredEvents = await reopened.readRuntimeEvents(sessionId, runId);
+            assert.deepEqual(
+              recoveredEvents.map((event) => event.id),
+              committedEvents.map((event) => event.id),
+              `${failpoint.id} reopened a different committed prefix`,
+            );
 
-          const first = buildResumePlanFromRuntimeEvents(recoveredEvents);
-          const second = buildResumePlanFromRuntimeEvents(recoveredEvents);
-          assert.deepEqual(second, first, `${failpoint.id} projection was not deterministic`);
-          assertResumePlanForPrefix(failpoint.committedPrefix, first);
-          assert.deepEqual(
-            await reopened.readRuntimeEvents(sessionId, runId),
-            recoveredEvents,
-            `${failpoint.id} projection mutated the durable ledger`,
-          );
-          reopened.close();
-        }
+            const first = buildResumePlanFromRuntimeEvents(recoveredEvents);
+            const second = buildResumePlanFromRuntimeEvents(recoveredEvents);
+            assert.deepEqual(second, first, `${failpoint.id} projection was not deterministic`);
+            assertResumePlanForPrefix(failpoint.committedPrefix, first);
+            assert.deepEqual(
+              await reopened.readRuntimeEvents(sessionId, runId),
+              recoveredEvents,
+              `${failpoint.id} projection mutated the durable ledger`,
+            );
+            reopened.close();
+          }),
+        );
       } finally {
         await rm(root, { recursive: true, force: true });
       }
