@@ -72,6 +72,8 @@ const DEFAULT_BACKOFF_MIN_MS = 20;
 const DEFAULT_BACKOFF_MAX_MS = 250;
 const MIN_CANDIDATE_INTERVAL_MS = 250;
 export const ELECTION_DEADLINE_MS_ENV_VAR = 'MAKA_RUNTIME_HOST_ELECTION_DEADLINE_MS';
+/** Lets verification spawn a Host without waiting out the shipped idle grace. */
+export const IDLE_GRACE_MS_ENV_VAR = 'MAKA_RUNTIME_HOST_IDLE_GRACE_MS';
 
 export interface ConnectOrSpawnRuntimeHostInput {
   rootPath: string;
@@ -81,6 +83,8 @@ export interface ConnectOrSpawnRuntimeHostInput {
   takeoverHostEpoch?: string;
   clientInstanceId?: string;
   electionDeadlineMs?: number;
+  /** Pins idle grace, leaving the environment override no say. */
+  idleGraceMs?: number;
   connectTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   candidateEntrypoint: string | URL;
@@ -113,23 +117,30 @@ const defaultDependencies: ConnectOrSpawnRuntimeHostDependencies = {
 };
 
 /**
+ * Invalid values fail closed: a silently ignored typo would leave the operator
+ * believing they changed a window when they did not.
+ */
+function durationMsFromEnvironment(
+  rawValue: string | undefined,
+  envVar: string,
+  minimum: number,
+): number | undefined {
+  if (rawValue === undefined || rawValue.trim() === '') return undefined;
+  const parsed = Number(rawValue);
+  requireOptionalTimeout(parsed, envVar, minimum);
+  return parsed;
+}
+
+/**
  * Resolves the operator override for the client election deadline. Large
  * workspaces can legitimately take longer than the default window on their
  * first start after an upgrade, so the deadline must be raisable without a
- * code change. Invalid values fail closed: a silently ignored typo would
- * leave the operator believing they widened the window when they did not.
+ * code change.
  */
 export function electionDeadlineMsFromEnvironment(
   rawValue: string | undefined,
 ): number | undefined {
-  if (rawValue === undefined || rawValue.trim() === '') return undefined;
-  const parsed = Number(rawValue);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > 120_000) {
-    throw new RangeError(
-      `${ELECTION_DEADLINE_MS_ENV_VAR} must be an integer between 1 and 120000 milliseconds`,
-    );
-  }
-  return parsed;
+  return durationMsFromEnvironment(rawValue, ELECTION_DEADLINE_MS_ENV_VAR, 1);
 }
 
 export type ConnectOrSpawnRuntimeHostResult =
@@ -215,6 +226,12 @@ export type ConnectOwnedRuntimeHostResult =
   | Exclude<ConnectOrSpawnRuntimeHostResult, { kind: 'connected' }>
   | { kind: 'failed'; reason: 'existing_host' };
 
+/** An owned Host dies with its Surface, so its idle grace is neither set nor overridable. */
+type OwnedRuntimeHostInput = Omit<
+  ConnectOrSpawnRuntimeHostInput,
+  'candidateEntrypoint' | 'idleGraceMs'
+>;
+
 interface ConnectOwnedRuntimeHostDependencies {
   launchCandidate: typeof launchOwnedRuntimeHostCandidate;
 }
@@ -224,13 +241,13 @@ const defaultOwnedDependencies: ConnectOwnedRuntimeHostDependencies = {
 };
 
 export async function connectOwnedRuntimeHost(
-  input: Omit<ConnectOrSpawnRuntimeHostInput, 'candidateEntrypoint'>,
+  input: OwnedRuntimeHostInput,
 ): Promise<ConnectOwnedRuntimeHostResult> {
   return connectOwnedRuntimeHostWithDependencies(input, defaultOwnedDependencies);
 }
 
 export async function connectOwnedRuntimeHostWithDependencies(
-  input: Omit<ConnectOrSpawnRuntimeHostInput, 'candidateEntrypoint'>,
+  input: OwnedRuntimeHostInput,
   dependencies: ConnectOwnedRuntimeHostDependencies,
 ): Promise<ConnectOwnedRuntimeHostResult> {
   let launch: ReturnType<typeof launchOwnedRuntimeHostCandidate> | undefined;
@@ -240,13 +257,11 @@ export async function connectOwnedRuntimeHostWithDependencies(
       {
         ...input,
         candidateEntrypoint: new URL('../execution-candidate-main.js', import.meta.url),
+        idleGraceMs: 0,
       },
       {
         launchCandidate(candidate) {
-          launch ??= dependencies.launchCandidate({
-            ...candidate,
-            idleGraceMs: 0,
-          });
+          launch ??= dependencies.launchCandidate(candidate);
           return launch;
         },
         random: Math.random,
@@ -299,15 +314,18 @@ export async function connectOrSpawnRuntimeHostWithDependencies(
   input: ConnectOrSpawnRuntimeHostInput,
   dependencies: ConnectOrSpawnRuntimeHostDependencies,
 ): Promise<ConnectOrSpawnRuntimeHostResult> {
+  const environment = dependencies.env ?? process.env;
   const deadlineMs =
     input.electionDeadlineMs ??
-    electionDeadlineMsFromEnvironment(
-      (dependencies.env ?? process.env)[ELECTION_DEADLINE_MS_ENV_VAR],
-    ) ??
+    electionDeadlineMsFromEnvironment(environment[ELECTION_DEADLINE_MS_ENV_VAR]) ??
     DEFAULT_ELECTION_DEADLINE_MS;
+  const idleGraceMs =
+    input.idleGraceMs ??
+    durationMsFromEnvironment(environment[IDLE_GRACE_MS_ENV_VAR], IDLE_GRACE_MS_ENV_VAR, 0);
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0 || deadlineMs > 120_000) {
     throw new RangeError('electionDeadlineMs must be an integer between 1 and 120000');
   }
+  requireOptionalTimeout(input.idleGraceMs, 'idleGraceMs', 0);
   validateProtocolRange(input.protocol);
   requireHostCompositionId(input.compositionId);
   requireOptionalTimeout(input.connectTimeoutMs, 'connectTimeoutMs', 1);
@@ -471,6 +489,7 @@ export async function connectOrSpawnRuntimeHostWithDependencies(
               ? {}
               : { executable: input.candidateExecutable }),
             initialConnectionTimeoutMs: Math.ceil(remaining),
+            ...(idleGraceMs === undefined ? {} : { idleGraceMs }),
             ...(input.generation === undefined ? {} : { generation: input.generation }),
             ...(managedLaunchClaim === undefined ? {} : { managedLaunchClaim }),
             ...(input.onExit === undefined ? {} : { onExit: input.onExit }),
