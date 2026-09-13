@@ -18,6 +18,8 @@
 name: CLI package validation
 
 on:
+  push:
+    branches: [perf/windows-defender-trial]
   pull_request:
     paths:
       - '.github/workflows/cli-package-validation.yml'
@@ -310,6 +312,16 @@ jobs:
       - name: Validate the installed tarball
         id: first-node-smoke
         continue-on-error: true
+        run: node scripts/smoke-release-cli-package.mjs
+      - name: Exclude the smoke roots from Defender real-time scanning
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusEnabled
+          Add-MpPreference -ExclusionPath $env:TEMP, $env:RUNNER_TEMP, $env:GITHUB_WORKSPACE
+          (Get-MpPreference).ExclusionPath
+      - name: Validate the installed tarball with the Defender exclusion
+        if: runner.os == 'Windows'
         run: node scripts/smoke-release-cli-package.mjs
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: matrix.second_node != ''
