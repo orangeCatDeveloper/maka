@@ -95,7 +95,7 @@ test('core CI validates pull requests and the resulting main branch state', () =
   const workflow = readWorkflow('ci.yml');
 
   assert.match(workflow, /pull_request:\n\s+branches: \[main\]/u);
-  assert.match(workflow, /push:\n\s+branches: \[main\]/u);
+  assert.match(workflow, /push:\n\s+branches: \[main[,\]]/u);
   assert.match(workflow, /PUSH_BASE_SHA: \$\{\{ github\.event\.before \}\}/u);
   assert.match(workflow, /PR_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/u);
   assert.doesNotMatch(workflow, /github\.event\.pull_request\.base\.sha/u);
@@ -599,7 +599,7 @@ test('the recovery lane pairs its path filter with a nightly run and a main push
   // filter because `strict: false` lets a stale-base pull request go green,
   // and because a paths filter only sees the first 300 files of a diff.
   assert.ok(readPullRequestPathFilter('windows-recovery.yml').length > 0, 'no paths filter');
-  assert.match(triggers, /\n {2}push:\n {4}branches: \[main\]\n/u);
+  assert.match(triggers, /\n {2}push:\n {4}branches: \[main[,\]]/u);
   assert.doesNotMatch(
     triggers.match(/\n {2}push:\n(?:(?: {4}[^\n]*)?\n)*/u)?.[0] ?? '',
     /\bpaths(-ignore)?:/u,

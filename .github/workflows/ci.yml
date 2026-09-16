@@ -21,7 +21,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, ci-ab3-control, ci-ab3-merged]
   workflow_dispatch:
 
 # A group holds at most one pending run, and a third entering cancels the queued
