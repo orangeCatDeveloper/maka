@@ -436,20 +436,16 @@ jobs:
 
       # The smoke only launches headless; the full Chrome build was downloaded
       # and never opened. The headed consumer (perf/storybook.mjs) self-installs.
-      - name: Restore Playwright Chromium cache
-        if: steps.plan.outputs.storybook == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-
       - name: Install Playwright Chromium
         if: steps.plan.outputs.storybook == 'true'
         run: npx playwright install --with-deps --only-shell chromium
 
       - name: Build Storybook
         if: steps.plan.outputs.storybook == 'true'
-        run: npm --workspace @maka/desktop run build-storybook
+        # The smoke and the geometry ablation open iframe.html only, so skip
+        # the manager bundle, docgen and sourcemaps. performance-frontend.yml
+        # keeps the production build its measurements are calibrated against.
+        run: npm --workspace @maka/desktop run build-storybook -- --test --preview-only
 
       - name: Storybook smoke
         if: steps.plan.outputs.storybook == 'true'

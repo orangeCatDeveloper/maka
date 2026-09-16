@@ -3742,6 +3742,9 @@ function loadBaseConfigInWorker(repoRoot, desktopRoot, base, options) {
       else reject(new Error(message.error));
     });
     worker.once('error', reject);
+    worker.once('exit', (code) => {
+      if (code !== 0) reject(new Error(`base tree worker exited with code ${code}`));
+    });
   });
 }
 
